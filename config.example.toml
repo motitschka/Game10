@@ -1,0 +1,7 @@
+# Game10 Config. Copy to ~/.config/game10/config.toml and edit.
+# Its existence means setup is done: without it, Game10 shows First-run Setup.
+# The SteamGridDB API key does not go here: it lives in ~/.config/game10/secrets.toml.
+
+# The folder that holds one folder per System, plus bios/, saves/ and states/.
+# Default: "~/Games"
+games_root = "~/Games"
