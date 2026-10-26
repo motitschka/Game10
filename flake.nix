@@ -31,6 +31,7 @@
         # Game10 finds its font with fontconfig's fc-match.
         postInstall = ''
           wrapProgram $out/bin/game10 --prefix PATH : ${lib.makeBinPath [ pkgs.fontconfig ]}
+          install -Dm644 ${./data/game10.svg} $out/share/icons/hicolor/scalable/apps/game10.svg
         '';
 
         desktopItems = [
@@ -39,6 +40,8 @@
             desktopName = "Game10";
             comment = "Play your Nintendo and Sony games";
             exec = "game10";
+            icon = "game10";
+            startupWMClass = "game10";
             categories = [ "Game" "Emulator" ];
           })
         ];
