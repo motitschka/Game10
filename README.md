@@ -664,3 +664,10 @@ License](LICENSE) for more details.
 
 The libretro Cores and Standalone Emulators that Game10 uses are separate projects under their own
 licenses. Game10 downloads or starts them, but doesn't ship them.
+
+## Trademarks
+
+The System logos on the Carousel and the Console Pages are trademarks of Nintendo and of Sony Interactive
+Entertainment. Game10 uses them only to name the Systems, they are not covered by the GPL-3.0 licence,
+and Game10 is not affiliated with or endorsed by either company. Where each comes from is in
+[design/logos/SOURCES.md](design/logos/SOURCES.md).
