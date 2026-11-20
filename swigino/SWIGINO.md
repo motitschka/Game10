@@ -43,7 +43,7 @@ Games need keys dumped from your own Switch.
 
 ## Building
 
-`scripts/build-suyu-core.sh` fetches the submodules (shallow), builds the Core in
+`scripts/build-swigino-core.sh` fetches the submodules (shallow), builds the Core in
 `~/.cache/game10/suyu-build/swigino` and installs it where Game10 looks for Cores. See its header for
 what it needs. `scripts/ci/build-swigino-portable.sh` builds the Core Game10 publishes, one that loads
 on any current distribution, in the manylinux_2_28 container; GitHub Actions runs it
