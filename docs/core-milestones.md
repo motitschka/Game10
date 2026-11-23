@@ -419,7 +419,7 @@ commits in `swigino/` rather than added to a patch file. F3 and F4 don't block M
   → BIOS's Switch row shows only the keys. Settings → Cores now has the twelve rows its layout was
   made for, so its test no longer asks for room for a thirteenth: **the next Core (M10 to M12) needs
   a new layout for that page.** ADR 0022 records all of it.
-- **First release (2026-11-20): `swigino-1`** (tag on `7df310e`), built and published by Actions run
+- **First release (2026-11-20): `swigino-1`** (tag on `6634a26`), built and published by Actions run
   44710144020: `swigino_libretro.so.zip`, 16.7 MB, SHA-256 `35e4f108…035d`, now pinned in
   `src/cores.rs`. GitHub answers the download with one 302 to `release-assets.githubusercontent.com`.
   Game10's own downloader (`Download::start` with the real fetcher, in a throwaway test) followed it,
