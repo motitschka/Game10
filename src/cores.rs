@@ -526,9 +526,9 @@ pub static SWIGINO: CoreInfo = CoreInfo {
 /// The swigino release Game10 downloads: `scripts/ci/build-swigino-portable.sh`'s Core, built
 /// by `.github/workflows/swigino-core.yml` for the tag `swigino-<version>`.
 const SWIGINO_RELEASE_URL: &str =
-    "https://github.com/motitschka/Game10/releases/download/swigino-1/swigino_libretro.so.zip";
+    "https://github.com/motitschka/Game10/releases/download/swigino-2/swigino_libretro.so.zip";
 /// The SHA-256 of [`SWIGINO_RELEASE_URL`]'s zip, as its release's `.sha256` file gives it.
-const SWIGINO_RELEASE_SHA256: &str = "35e4f10811e9a5218fe9803f2a1ec724a6b8f649d3588de4fccca506cfb2035d";
+const SWIGINO_RELEASE_SHA256: &str = "ce189d4525a96dd34dd74619c183440b6c202a74f1bcd510f95ee4dd24768a86";
 
 /// The player's own Switch keys (FR-NEW-5): `prod.keys`, and `title.keys` if they have one, in
 /// `<Games Root>/bios/switch/`. Only encrypted Games (`.nsp`, `.xci`) need them; homebrew
