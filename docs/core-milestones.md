@@ -12,7 +12,7 @@ Cores: [roadmap-external-systems.md](roadmap-external-systems.md),
 
 | Milestone | System | Status | Branch |
 |---|---|---|---|
-| M9 | Switch: Restart and Delete save data | S1 started | `m9-switch-saves` |
+| M9 | Switch: Restart and Delete save data | S1 of S3 done | `m9-switch-saves` |
 | M10 | PS3 inside Game10 | Not started | `m10-ps3` |
 | M11 | PS4 inside Game10 | Not started | `m11-ps4` |
 | M12 | Wii U inside Game10 | Not started | `m12-wiiu` |
@@ -101,6 +101,15 @@ those would need new code inside suyu, and Game10 is written in Rust only.
   dropped. The S1 check: on `swigino-2`, `retro_unload_game` then `retro_load_game` on the same Core
   returns true in 0.3 s, but suyu composites no frame after it (black for 360 frames), so Restart
   can't be a reload inside the Core.
+- **S1 done (2026-11-23).** `CoreInfo::restart()` says how each Core restarts: `Reset` (its
+  `retro_reset`) or `LoadAgain` (swigino). For `LoadAgain` the Session keeps what `Core::load` needs
+  (`LoadAgain` in `src/session/sdl.rs`), and Restart drops the Core and loads it again without an
+  OpenGL host, in the same Session; `Session.core` is an `Option` for that moment, and a Core that
+  can't load again ends the Session with "Couldn't restart the Game". Shut down and loaded again
+  three times in one process, swigino draws each time; a restart takes about 0.8 s, and the new
+  Core's first frame comes one tick after it. `hw_swigino_restart_boots_the_game_again_and_it_plays_on`
+  goes through the real Pause Menu and fails with swigino restarted by `retro_reset`. README,
+  CHANGELOG and manual-checks.md are updated for Restart; FR-NEW-5 and ADR 0019 wait for S3.
 
 ---
 

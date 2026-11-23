@@ -103,8 +103,10 @@ The Switch controller in PlayStation Games is checked in section 5.
 - [ ] With your own `prod.keys` dumped from your own Switch in `~/Games/bios/switch/`, one of your own
       Games (`.nsp` or `.xci`) starts, plays with the controller, and makes sound; note the frame rate.
 - [ ] Without the keys, Play on an `.nsp` shows "Switch keys missing" naming that folder.
-- [ ] The Pause Menu over a Switch Game shows Save state, Load state and Restart game greyed with the
-      note, and the Game (and its sound) stops while the menu is open, then carries on with Resume.
+- [ ] The Pause Menu over a Switch Game shows Save state and Load state greyed with the note, and the
+      Game (and its sound) stops while the menu is open, then carries on with Resume.
+- [ ] Restart game over a Switch Game starts it again from the beginning within a few seconds, and it
+      plays on with sound; an In-game Save made before is still there after.
 - [ ] An In-game Save made in a Switch Game is there after quitting and starting it again, and lives
       under `~/Games/saves/switch/suyu/nand/`. Nothing appears in `~/.local/share/suyu`.
 

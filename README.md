@@ -603,8 +603,8 @@ Oldest release on screen, once per Game.
   In-game Save.
 - shadPS4 stays open in its own game list when a game stops, so Playtime keeps counting until you
   close the emulator's window.
-- Switch has no Save States, Resume State or Restart game: the swigino Core can't save the
-  emulated Switch's state. Your In-game Saves are kept as usual. Switch is only confirmed with homebrew so
+- Switch has no Save States or Resume State: the swigino Core can't save the emulated Switch's
+  state. Restart game works; it starts the Game again, which takes a moment. Your In-game Saves are kept as usual. Switch is only confirmed with homebrew so
   far, not with a commercial game.
 - Embedded Systems render with OpenGL only, not Vulkan, so some PS2, 3DS, GameCube and Wii Games may
   run slower than in their standalone emulators.

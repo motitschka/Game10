@@ -39,7 +39,9 @@ use crate::ui::nav::{Hint, Nav, Screen, Transition};
 
 /// A Game running on its Core.
 pub struct Session {
-    core: Core,
+    /// `None` only once a restart couldn't load the Core again; the session is then ended at once
+    /// (see [`tick`]).
+    core: Option<Core>,
     game_id: i64,
     /// The Display Title.
     title: String,
@@ -78,8 +80,9 @@ pub struct Session {
     stick_dpad: bool,
     /// Whether the Core has Save States and a Resume State ([`cores::CoreInfo::has_states`]).
     has_states: bool,
-    /// Whether the Core can restart the Game ([`cores::CoreInfo::resets`]).
-    resets: bool,
+    /// What loading the Core again needs, for a Core restarted that way
+    /// ([`cores::Restart::LoadAgain`]); `None` for one that resets.
+    load_again: Option<LoadAgain>,
     /// Whether a Nintendo-lettered pad's face buttons map by letter ([`input::faces_by_letter`]).
     by_letter: bool,
     /// How fast the Game really ran, logged when the session ends.
@@ -275,6 +278,24 @@ impl Display for StartError {
     }
 }
 
+/// What [`Session::restart`] needs to load a [`cores::Restart::LoadAgain`] Core again for the same
+/// Game, as [`Session::start`] loaded it. It is loaded without an OpenGL host: swigino, the one
+/// Core restarted this way, renders with its own Vulkan device and never asks for one.
+struct LoadAgain {
+    core_path: PathBuf,
+    game_path: PathBuf,
+    dirs: CoreDirs,
+    options: Vec<(&'static str, &'static str)>,
+    device: PortDevice,
+    reread_timing: bool,
+    address_window: bool,
+    /// The Core's name and the Display Title, for the message when it can't load again.
+    core_name: &'static str,
+}
+
+/// What [`Session::core`] says when the Core is gone, which only a failed restart leaves.
+const NO_CORE: &str = "the session's Core is loaded until a failed restart ends it";
+
 impl Session {
     /// Loads `play`'s Game on its System's Core, on the OpenGL host its [`cores::GlKind`] needs
     /// (see [`open_gl`]), beside the SDL renderer's own window and context `frontend` (`None` on
@@ -333,6 +354,16 @@ impl Session {
         };
         // When the Core says why (a missing BIOS, an encrypted dump), that is the reason shown
         // (FR-EMB-14).
+        let load_again = (core_info.restart() == cores::Restart::LoadAgain).then(|| LoadAgain {
+            core_path: core_path.clone(),
+            game_path: game_path.clone(),
+            dirs: dirs.clone(),
+            options: options.clone(),
+            device: setup.device,
+            reread_timing: setup.reread_timing,
+            address_window: setup.address_window,
+            core_name: core_info.name,
+        });
         let mut core = Core::load(&core_path, &game_path, dirs, setup, gl).map_err(|e| {
             StartError::generic(match e.core_message() {
                 Some(said) => format!("{} couldn't start {}.\n{said}", core_info.name, game.title),
@@ -369,7 +400,7 @@ impl Session {
                 .ok()
         });
         Ok(Session {
-            core,
+            core: Some(core),
             game_id: game.id,
             title: game.title.clone(),
             audio,
@@ -393,7 +424,7 @@ impl Session {
             border: core_info.cuts_own_border().then(BorderCut::default),
             stick_dpad: core_info.stick_is_dpad(),
             has_states: core_info.has_states(),
-            resets: core_info.resets(),
+            load_again,
             by_letter: input::faces_by_letter(system),
             pace: Pace::default(),
             start_message,
@@ -404,7 +435,7 @@ impl Session {
     /// [part](Session::part) of its frame drawn, fitted to the window (ADR 0020, ADR 0021). The
     /// mouse touches the touch screen from the same rect.
     fn picture(&self, window: (f32, f32)) -> Rect {
-        border::fit_part(self.core.av_info().aspect_ratio, self.part(), window)
+        border::fit_part(self.core().av_info().aspect_ratio, self.part(), window)
     }
 
     /// The part of the Core's frame drawn as the Game's picture, in fractions of it: the frame
@@ -520,7 +551,7 @@ impl Session {
         if let Some(controls) = &mut self.touch
             && let Some((key, value)) = controls.apply(&mut input, down(input::SWAP_SCREENS_KEY))
         {
-            self.core.set_option(key, value);
+            self.core_mut().set_option(key, value);
         }
         self.held.mask(&mut input);
         self.follow_av_info();
@@ -534,7 +565,7 @@ impl Session {
         self.pace.core_frames += u64::from(frames);
         self.pace.secs += dt.max(0.0);
         for _ in 0..frames {
-            let out = self.core.run_frame(&input);
+            let out = self.core.as_mut().expect(NO_CORE).run_frame(&input);
             if !out.duped {
                 gfx.upload_game_frame(out.video);
             }
@@ -554,7 +585,7 @@ impl Session {
             self.pace.dropped += 1;
         }
         if let Some((path, tracker)) = &mut self.save
-            && let Some(ram) = self.core.save_ram()
+            && let Some(ram) = self.core.as_mut().expect(NO_CORE).save_ram()
             && tracker.due(Duration::from_secs_f64(dt.max(0.0)), ram)
         {
             write_save(path, tracker, ram);
@@ -565,7 +596,7 @@ impl Session {
     /// Follows a Core's `SET_SYSTEM_AV_INFO`: a new frame rate reschedules frames, a new sample
     /// rate plays sound at it. A new geometry needs nothing, as the picture follows frame size.
     fn follow_av_info(&mut self) {
-        let av = self.core.av_info();
+        let av = self.core().av_info();
         if av.fps != self.fps && av.fps > 0.0 {
             self.fps = av.fps;
             self.scheduler = Scheduler::new(av.fps, self.refresh);
@@ -597,8 +628,8 @@ impl Session {
 
     /// Writes slot `n`'s Save State and a screenshot of the current frame (FR-EMB-5).
     fn save_slot(&mut self, n: usize) -> Result<SlotInfo, String> {
-        let state = self.core.serialize().map_err(|e| e.to_string())?;
-        let png = states::encode_png(&states::frame_rgb(self.core.frame()));
+        let state = self.core_mut().serialize().map_err(|e| e.to_string())?;
+        let png = states::encode_png(&states::frame_rgb(self.core().frame()));
         states::write_slot(&self.states.slot(n), &state, &self.states.thumb(n), png)
             .map_err(|e| e.to_string())?;
         slot_info(&self.states, n).ok_or_else(|| "the slot is gone".to_owned())
@@ -606,13 +637,57 @@ impl Session {
 
     fn load_slot(&mut self, n: usize) -> Result<(), String> {
         let state = fs::read(self.states.slot(n)).map_err(|e| e.to_string())?;
-        self.core.unserialize(&state).map_err(|e| e.to_string())
+        self.core_mut().unserialize(&state).map_err(|e| e.to_string())
     }
 
-    /// Resets the Core, as the power button would: the Game restarts, but nothing on disk
-    /// changes (FR-EMB-4).
-    fn restart(&mut self) {
-        self.core.reset();
+    /// Restarts the Game (FR-EMB-4): resets the Core, as the power button would, or for a Core
+    /// restarted by [loading it again](cores::Restart::LoadAgain), shuts it down as quitting does
+    /// and loads it again for the same Game, in this session. Nothing on disk changes beyond what
+    /// the Core writes itself as it shuts down (swigino its NAND, with the In-game Saves). `Err` is
+    /// the message to show when the Core couldn't load again; the session has no Core then and
+    /// must end.
+    fn restart(&mut self) -> Result<(), String> {
+        let Some(again) = &self.load_again else {
+            self.core_mut().reset();
+            return Ok(());
+        };
+        // swigino keeps its saves in its NAND, not in save memory Game10 would write first.
+        debug_assert!(
+            self.save.is_none(),
+            "a Core loaded again has no save memory to write"
+        );
+        // Only one Core may be loaded at a time, so this one goes first.
+        drop(self.core.take());
+        let setup = CoreSetup {
+            options: &again.options,
+            device: again.device,
+            reread_timing: again.reread_timing,
+            address_window: again.address_window,
+        };
+        let core = Core::load(
+            &again.core_path,
+            &again.game_path,
+            again.dirs.clone(),
+            setup,
+            None,
+        )
+        .map_err(|e| {
+            let why = e.core_message().map_or_else(|| e.to_string(), str::to_owned);
+            format!("{} couldn't start {} again: {why}", again.core_name, self.title)
+        })?;
+        self.core = Some(core);
+        self.follow_av_info();
+        self.scheduler.reset();
+        self.held = HeldOver::default();
+        Ok(())
+    }
+
+    fn core(&self) -> &Core {
+        self.core.as_ref().expect(NO_CORE)
+    }
+
+    fn core_mut(&mut self) -> &mut Core {
+        self.core.as_mut().expect(NO_CORE)
     }
 
     /// Writes the Resume State the next launch continues from (FR-EMB-6).
@@ -620,7 +695,8 @@ impl Session {
         if !self.has_states {
             return;
         }
-        store_resume(&self.states.resume(), self.core.serialize());
+        let Some(core) = &mut self.core else { return };
+        store_resume(&self.states.resume(), core.serialize());
     }
 
     /// Writes the save memory if it changed and the Resume State, records the Playtime and
@@ -645,7 +721,8 @@ impl Session {
         }
         self.write_resume();
         if let Some((path, tracker)) = &mut self.save
-            && let Some(ram) = self.core.save_ram()
+            && let Some(core) = &mut self.core
+            && let Some(ram) = core.save_ram()
             && tracker.changed(ram)
         {
             write_save(path, tracker, ram);
@@ -747,6 +824,9 @@ const NO_GL_TITLE: &str = "OpenGL isn't available";
 fn start_state(states: &StatePaths, slot: Option<usize>) -> PathBuf {
     slot.map_or_else(|| states.resume(), |n| states.slot(n))
 }
+
+/// The title of the message pushed when Restart game couldn't load the Core again.
+const RESTART_FAILED_TITLE: &str = "Couldn't restart the Game";
 
 /// The title of the message pushed when a chosen Save State slot couldn't be loaded.
 const SLOT_FAILED_TITLE: &str = "Couldn't load the save";
@@ -861,10 +941,14 @@ pub fn tick(
                 }
             }
         },
-        Some(Request::Restart) => {
-            running(nav).expect("found above").restart();
-            nav.pop();
-        }
+        Some(Request::Restart) => match running(nav).expect("found above").restart() {
+            Ok(()) => nav.pop(),
+            Err(message) => {
+                eprintln!("game10: {message}");
+                end(nav, ctx);
+                nav.push(Box::new(Message::new(RESTART_FAILED_TITLE, message)));
+            }
+        },
         Some(Request::Quit) => end(nav, ctx),
         None if resume => nav.pop(),
         None => {}
@@ -880,7 +964,8 @@ pub fn on_pause(nav: &mut Nav) {
         vec![None; crate::session::states::SLOTS]
     };
     let menu = PauseMenu::new(&session.title, session.meta(), slots)
-        .with_capabilities(session.has_states, session.resets);
+        // Every Core restarts its Game, by resetting or by loading again (cores::Restart).
+        .with_capabilities(session.has_states, true);
     nav.push(Box::new(menu));
 }
 
@@ -969,14 +1054,14 @@ mod tests {
     fn frame_hash(session: &Session) -> u64 {
         use std::hash::{DefaultHasher, Hash, Hasher};
         let mut h = DefaultHasher::new();
-        session.core.frame().hash(&mut h);
+        session.core().frame().hash(&mut h);
         h.finish()
     }
 
     /// Runs `n` frames without input; returns the last one's hash.
     fn run(session: &mut Session, n: usize) -> u64 {
         for _ in 0..n {
-            session.core.run_frame(&Default::default());
+            session.core_mut().run_frame(&Default::default());
         }
         frame_hash(session)
     }
@@ -1035,7 +1120,7 @@ mod tests {
         let mut down = crate::libretro::InputState::default();
         down.set(0, crate::libretro::Button::Down, true);
         for _ in 0..6 {
-            session.core.run_frame(&down);
+            session.core_mut().run_frame(&down);
         }
         run(&mut session, 30);
         session.end(&mut ctx, 0);
@@ -1122,7 +1207,7 @@ mod tests {
         let mut down = crate::libretro::InputState::default();
         down.set(0, crate::libretro::Button::Down, true);
         for _ in 0..6 {
-            running(&mut nav).unwrap().core.run_frame(&down);
+            running(&mut nav).unwrap().core_mut().run_frame(&down);
         }
         let moved = run(running(&mut nav).unwrap(), 2);
 
@@ -1350,7 +1435,7 @@ mod tests {
         // A tick of 20 ms runs at least one Core frame.
         let stick = |session: &mut Session| {
             assert!(!session.tick(&mut NoPicture, 0.02, &[], Mouse::default(), left_held));
-            session.core.last_input().stick(0, Stick::Left)
+            session.core().last_input().stick(0, Stick::Left)
         };
         assert!(session.stick_dpad);
         assert_eq!(
@@ -1425,7 +1510,7 @@ mod tests {
             assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
         }
         assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[(0, east)], Mouse::default(), |_| false));
-        let mask = session.core.last_input().mask(0);
+        let mask = session.core().last_input().mask(0);
         gfx.clear(crate::ui::theme::Colour::hex(0x000000));
         session.draw(&mut gfx, &ctx);
         drop(session);
@@ -1472,7 +1557,7 @@ mod tests {
             })
         );
         assert_eq!(
-            session.core.last_input().mask(0),
+            session.core().last_input().mask(0),
             1 << crate::libretro::Button::A as u16,
             "SNES: Nintendo A stays by position: RetroPad A"
         );
@@ -1535,7 +1620,7 @@ mod tests {
         };
         let start_held = |nav: &mut Nav| {
             let session = running(nav).expect("a Game runs");
-            session.core.last_input().is_pressed(0, Button::Start)
+            session.core().last_input().is_pressed(0, Button::Start)
         };
         let act = |nav: &mut Nav, ctx: &mut Ctx, action: Action| {
             nav.handle(Input::Action(action), &Hits::default(), ctx);
@@ -1575,9 +1660,9 @@ mod tests {
         // What the Game shows two frames on from here, which a relaunch must show too. bsnes's
         // first frame after restoring a state into a freshly loaded Core is a stale one.
         let session = running(&mut nav).unwrap();
-        let here = session.core.serialize().unwrap();
+        let here = session.core_mut().serialize().unwrap();
         let next = run(session, 2);
-        session.core.unserialize(&here).unwrap();
+        session.core_mut().unserialize(&here).unwrap();
 
         // Quit to library, then close the window: the Game ends once.
         tick(&mut nav, &mut ctx, &esc);
@@ -2109,7 +2194,7 @@ mod tests {
         // The new session has moved on to the first item: the Resume State must take it back.
         let state = fs::read(&resume).unwrap();
         session
-            .core
+            .core_mut()
             .unserialize(&state)
             .unwrap_or_else(|e| panic!("resume: {e}"));
         press_down(&mut session, &mut gfx);
@@ -2402,6 +2487,47 @@ mod tests {
         use crate::ui::text::Fonts;
 
         let _serial = serial();
+        let (root, data, ctx, game) = space_nx_world();
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let shot = data.path().join("shot.bmp");
+        let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(!session.has_states && session.load_again.is_some());
+        for _ in 0..360 {
+            assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
+        let frame = session.core().frame();
+        assert_eq!((frame.width, frame.height), (1280, 720), "docked");
+
+        let quitting = Instant::now();
+        drop(session);
+        assert!(
+            quitting.elapsed().as_secs() < 5,
+            "quit took {:?}",
+            quitting.elapsed()
+        );
+        assert!(
+            data.path().join("system/suyu/config").is_dir(),
+            "its config under the data dir"
+        );
+        assert!(
+            root.path().join("saves/switch/suyu/nand").is_dir(),
+            "its NAND with the saves"
+        );
+        assert!(
+            !root.path().join("bios/suyu").exists(),
+            "nothing in the player's BIOS folder"
+        );
+        assert!(!root.path().join("states").exists(), "no Resume State");
+    }
+
+    /// A Games Root with the Space NX homebrew from `.testdata/games/switch/`, a data dir whose
+    /// Cores are `.testdata`'s, a Ctx on both, and the Game's row.
+    fn space_nx_world() -> (TempDir, TempDir, Ctx, GameRow) {
         let file = "Space NX (Homebrew).nro";
         let root = TempDir::new().unwrap();
         fs::create_dir_all(root.path().join("switch")).unwrap();
@@ -2428,41 +2554,98 @@ mod tests {
             favorite: false,
             release_date: None,
         };
+        (root, data, ctx, game)
+    }
+
+    /// Restart game over a Switch Game (M9 S1, ADR 0023), through the Pause Menu: with Save state
+    /// and Load state greyed, Down from Resume reaches Restart game, and confirming it shuts
+    /// swigino down and loads it again in the same session, within a few seconds. Space NX boots
+    /// again from the start on a Core that hasn't drawn yet, then draws and plays on; its NAND
+    /// stays.
+    #[test]
+    #[ignore = "needs /home/matei/Game10/.testdata"]
+    fn hw_swigino_restart_boots_the_game_again_and_it_plays_on() {
+        use crate::screens::Stub;
+        use crate::ui::input::Action;
+        use crate::ui::nav::Hits;
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        let (root, data, mut ctx, game) = space_nx_world();
         let (_sdl, canvas) = offscreen_renderer();
         let creator = canvas.texture_creator();
         let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
         let shot = data.path().join("shot.bmp");
-        let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
-            .unwrap_or_else(|e| panic!("{e}"));
-        assert!(!session.has_states && !session.resets);
-        for _ in 0..360 {
-            assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+        let mut nav = Nav::single(Box::new(Stub::new("Home")));
+        let none = |_: Scancode| false;
+        let esc = |k: Scancode| k == Scancode::Escape;
+        // swigino runs on its own clock, so frames are ticked at 60 a second.
+        let tick = |nav: &mut Nav, ctx: &mut Ctx, gfx: &mut Gfx<'_>, down: &dyn Fn(Scancode) -> bool| {
+            tick(nav, ctx, gfx, 1.0 / 60.0, &[], Mouse::default(), down);
             std::thread::sleep(std::time::Duration::from_millis(16));
-        }
-        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
-        let frame = session.core.frame();
-        assert_eq!((frame.width, frame.height), (1280, 720), "docked");
+        };
+        let act = |nav: &mut Nav, ctx: &mut Ctx, action: Action| {
+            nav.handle(Input::Action(action), &Hits::default(), ctx);
+        };
 
-        let quitting = Instant::now();
-        drop(session);
-        assert!(
-            quitting.elapsed().as_secs() < 5,
-            "quit took {:?}",
-            quitting.elapsed()
+        start(
+            &Play::resume(game),
+            &mut nav,
+            &ctx,
+            gfx.gl_context(),
+            None,
+            Some(60.0),
         );
+        for _ in 0..360 {
+            tick(&mut nav, &mut ctx, &mut gfx, &none);
+        }
+        assert_a_picture(
+            &shown(running(&mut nav).unwrap(), &mut gfx, &ctx, &shot),
+            "booted",
+        );
+
+        tick(&mut nav, &mut ctx, &mut gfx, &esc);
+        tick(&mut nav, &mut ctx, &mut gfx, &none);
+        assert!(nav.top().pause_menu().is_some(), "Esc pauses");
+        // Save state and Load state are greyed and skipped: Down goes straight to Restart game.
+        act(&mut nav, &mut ctx, Action::Down);
+        act(&mut nav, &mut ctx, Action::Confirm);
+        // The Restart confirmation: Right moves focus from Cancel to Restart, Confirm chooses it.
+        act(&mut nav, &mut ctx, Action::Right);
+        act(&mut nav, &mut ctx, Action::Confirm);
+        let restarting = Instant::now();
+        tick(&mut nav, &mut ctx, &mut gfx, &none);
         assert!(
-            data.path().join("system/suyu/config").is_dir(),
-            "its config under the data dir"
+            restarting.elapsed().as_secs() < 5,
+            "restart took {:?}",
+            restarting.elapsed()
+        );
+        assert!(nav.top().pause_menu().is_none(), "Restart closes the Pause Menu");
+        let session = running(&mut nav).expect("the Game still runs, in the same session");
+        assert_eq!(
+            session.core().frame().width,
+            0,
+            "a new Core, booting the Game from the start, that hasn't drawn yet"
+        );
+
+        for _ in 0..360 {
+            tick(&mut nav, &mut ctx, &mut gfx, &none);
+        }
+        let booted = shown(running(&mut nav).unwrap(), &mut gfx, &ctx, &shot);
+        assert_a_picture(&booted, "booted again");
+        for _ in 0..120 {
+            tick(&mut nav, &mut ctx, &mut gfx, &none);
+        }
+        assert_a_picture(
+            &shown(running(&mut nav).unwrap(), &mut gfx, &ctx, &shot),
+            "plays on",
         );
         assert!(
             root.path().join("saves/switch/suyu/nand").is_dir(),
-            "its NAND with the saves"
+            "its NAND, with the saves, stays"
         );
-        assert!(
-            !root.path().join("bios/suyu").exists(),
-            "nothing in the player's BIOS folder"
-        );
-        assert!(!root.path().join("states").exists(), "no Resume State");
+        end(&mut nav, &mut ctx);
+        assert!(running(&mut nav).is_none());
     }
 
     /// 3DS with Azahar (FR-NEW-2, ADR 0020): ftpd boots through a 3DS session on the SDL OpenGL
@@ -2506,7 +2689,7 @@ mod tests {
         assert!(session.touch_screen(), "the mouse cursor shows");
         tick_n(&mut session, &mut gfx, 600);
         assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
-        let frame = session.core.frame().clone();
+        let frame = session.core().frame().clone();
         assert_eq!(
             (frame.width, frame.height),
             (720, 240),
@@ -2595,7 +2778,7 @@ mod tests {
         for _ in 0..10 {
             assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], mouse, |_| false));
         }
-        let queries = session.core.input_queries();
+        let queries = session.core().input_queries();
         let asked = |id| queries.get(&(0, POINTER, 0, id)).copied();
         assert_eq!(asked(PRESSED), Some(1), "the press");
         assert_eq!(asked(X), Some(pointer.x), "x");
@@ -2603,7 +2786,7 @@ mod tests {
         tick_n(&mut session, &mut gfx, 30);
 
         // Azahar asked for L3 and R3; L3 is never pressed, whatever the player holds.
-        let joypad = |session: &Session, id| session.core.input_queries().get(&(0, JOYPAD, 0, id)).copied();
+        let joypad = |session: &Session, id| session.core().input_queries().get(&(0, JOYPAD, 0, id)).copied();
         assert_eq!(joypad(&session, R3), Some(0), "Azahar reads R3, its touch tap");
         assert_eq!(joypad(&session, L3), Some(0), "and L3, its swap and HOME");
         let mut l3 = PadState::default();
@@ -2617,9 +2800,9 @@ mod tests {
 
         // R3 on a pad, then Tab: each swaps which screen the renderer shows large, from the screens
         // as they were before; Azahar's frame keeps the top screen on its left.
-        let before = session.core.frame().clone();
+        let before = session.core().frame().clone();
         let top_still_left = |session: &Session| {
-            let left = sampled(session.core.frame(), AZAHAR_TOP);
+            let left = sampled(session.core().frame(), AZAHAR_TOP);
             difference(&left, &sampled(&before, AZAHAR_TOP))
                 < difference(&left, &sampled(&before, AZAHAR_TOUCH))
         };
@@ -2661,7 +2844,7 @@ mod tests {
         for _ in 0..10 {
             assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], mouse, |_| false));
         }
-        let queries = session.core.input_queries();
+        let queries = session.core().input_queries();
         let asked = |id| queries.get(&(0, POINTER, 0, id)).copied();
         let scale = |f: f32| ((f * 2.0 - 1.0) * 32767.0_f32).round() as i16;
         assert_eq!(asked(PRESSED), Some(1), "the press on the large touch screen");
@@ -2719,7 +2902,7 @@ mod tests {
         // The new session has moved on to the first item: the Resume State must take it back.
         let state = fs::read(&resume).unwrap();
         session
-            .core
+            .core_mut()
             .unserialize(&state)
             .unwrap_or_else(|e| panic!("resume: {e}"));
         tick_n(&mut session, &mut gfx, 60);
@@ -2765,7 +2948,7 @@ mod tests {
             let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
                 .unwrap_or_else(|e| panic!("{e}"));
             tick_n(&mut session, &mut gfx, 600);
-            let before = session.core.frame().clone();
+            let before = session.core().frame().clone();
             assert_eq!(
                 (before.width, before.height),
                 (720, 240),
@@ -2774,7 +2957,7 @@ mod tests {
             let right_before = sampled(&before, (400, 0, 320, 240));
 
             press_r3(&mut session, &mut gfx);
-            let after = session.core.frame().clone();
+            let after = session.core().frame().clone();
             assert_eq!((after.width, after.height), (720, 240), "still side by side");
             let (left_after, left_before) = (
                 sampled(&after, (0, 0, 400, 240)),
@@ -2786,7 +2969,7 @@ mod tests {
             );
 
             press_tab(&mut session, &mut gfx);
-            let back = sampled(session.core.frame(), (0, 0, 400, 240));
+            let back = sampled(session.core().frame(), (0, 0, 400, 240));
             assert!(
                 difference(&back, &left_before) < difference(&back, &right_before),
                 "Tab put the top screen back on the left"
@@ -2804,11 +2987,11 @@ mod tests {
             let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
                 .unwrap_or_else(|e| panic!("{e}"));
             tick_n(&mut session, &mut gfx, 600);
-            let before = session.core.frame().clone();
+            let before = session.core().frame().clone();
             assert_eq!((before.width, before.height), (400, 240), "the top screen alone");
 
             press_r3(&mut session, &mut gfx);
-            let after = session.core.frame().clone();
+            let after = session.core().frame().clone();
             assert_eq!(
                 (after.width, after.height),
                 (320, 240),
@@ -2816,7 +2999,7 @@ mod tests {
             );
 
             press_tab(&mut session, &mut gfx);
-            let back = session.core.frame().clone();
+            let back = session.core().frame().clone();
             assert_eq!(
                 (back.width, back.height),
                 (400, 240),
@@ -2908,7 +3091,7 @@ mod tests {
     fn frames_with(session: &mut Session, input: &crate::libretro::InputState, n: usize) -> Vec<i16> {
         let mut audio = Vec::new();
         for _ in 0..n {
-            audio.extend_from_slice(session.core.run_frame(input).audio);
+            audio.extend_from_slice(session.core_mut().run_frame(input).audio);
         }
         audio
     }
@@ -2924,9 +3107,9 @@ mod tests {
     /// Two seconds of Dolphin's sound arrive, stereo at its sample rate. Dolphin sends it from its
     /// CPU thread, not from `retro_run`.
     fn assert_sound_at_the_cores_rate(session: &mut Session) {
-        let frames = (2.0 * session.core.av_info().fps).round();
+        let frames = (2.0 * session.core().av_info().fps).round();
         let samples = frames_with(session, &Default::default(), frames as usize).len() as f64;
-        let av = session.core.av_info();
+        let av = session.core().av_info();
         let expected = frames / av.fps * 2.0 * av.sample_rate;
         assert!(
             (samples / expected - 1.0).abs() < 0.1,
@@ -3011,7 +3194,7 @@ mod tests {
         // The new session has moved on to the first item: the Resume State must take it back.
         let state = fs::read(&resume).unwrap();
         session
-            .core
+            .core_mut()
             .unserialize(&state)
             .unwrap_or_else(|e| panic!("resume: {e}"));
         tick_n(&mut session, gfx, 30);
@@ -3047,9 +3230,9 @@ mod tests {
         .unwrap_or_else(|e| panic!("{e}"));
         tick_n(&mut session, &mut gfx, 300);
         assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
-        let frame = session.core.frame();
+        let frame = session.core().frame();
         assert_eq!((frame.width, frame.height), (1280, 1056), "twice 640×528");
-        assert_eq!(session.core.av_info().aspect_ratio, 4.0 / 3.0);
+        assert_eq!(session.core().av_info().aspect_ratio, 4.0 / 3.0);
         assert_sound_at_the_cores_rate(&mut session);
 
         let mut down = PadState::default();
@@ -3094,8 +3277,8 @@ mod tests {
         tick_n(&mut session, &mut gfx, 300);
         let booted = shown_exactly(&mut session, &mut gfx, &ctx, &shot);
         assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
-        assert_eq!(session.core.av_info().aspect_ratio, 16.0 / 9.0);
-        let queries = session.core.input_queries();
+        assert_eq!(session.core().av_info().aspect_ratio, 16.0 / 9.0);
+        let queries = session.core().input_queries();
         for button in [Button::L, Button::R, Button::L2] {
             let id = (0, crate::libretro::PortDevice::RETROPAD.id(), 0, button as u32);
             assert!(queries.contains_key(&id), "{button:?}: {queries:?}");
@@ -3159,7 +3342,7 @@ mod tests {
         tick_n(&mut session, &mut gfx, 300);
         let booted = shown_exactly(&mut session, &mut gfx, &ctx, &shot);
         assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
-        let queries = session.core.input_queries();
+        let queries = session.core().input_queries();
         let retropad = crate::libretro::PortDevice::RETROPAD.id();
         for button in [Button::L, Button::R, Button::L2, Button::R2] {
             assert!(
@@ -3205,7 +3388,7 @@ mod tests {
         let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
         // FCE Ultra GX's own rate on each System, as measured with Dolphin as the first Core in
         // a process (so no previous Game's rate could leak in): used here, not
-        // `session.core.av_info().fps`, since that is read from the same stale place as
+        // `session.core().av_info().fps`, since that is read from the same stale place as
         // `session.fps` and would still agree with it when `rereads_timing` is broken.
         for (system, aspect, fps) in [
             ("gc", 4.0 / 3.0, 50.0),
@@ -3218,7 +3401,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{system}: {e}"));
             tick_n(&mut session, &mut gfx, 300);
             assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), system);
-            assert_eq!(session.core.av_info().aspect_ratio, aspect, "{system}");
+            assert_eq!(session.core().av_info().aspect_ratio, aspect, "{system}");
             assert_sound_at_the_cores_rate(&mut session);
             tick_n(&mut session, &mut gfx, 1);
             assert!(

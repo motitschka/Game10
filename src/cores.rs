@@ -502,9 +502,9 @@ pub static DOLPHIN: CoreInfo = CoreInfo {
 /// `scripts/build-swigino-core.sh` builds the same file locally. Its sound goes through Game10, its
 /// on-screen frame counter is off, and the Switch plays docked. It keeps its NAND (which holds
 /// In-game Saves) under the System's save folder and its config and caches in its own system
-/// folder ([`CoreInfo::own_system_dir`]). It has no Save States and can't restart a Game
-/// ([`CoreInfo::has_states`], [`CoreInfo::resets`]). Encrypted Games need the player's keys
-/// ([`SWITCH_KEYS`]).
+/// folder ([`CoreInfo::own_system_dir`]). It has no Save States ([`CoreInfo::has_states`]), and
+/// Game10 restarts its Game by loading it again ([`Restart::LoadAgain`]). Encrypted Games need the
+/// player's keys ([`SWITCH_KEYS`]).
 pub static SWIGINO: CoreInfo = CoreInfo {
     source: CoreSource::Release {
         url: SWIGINO_RELEASE_URL,
@@ -754,6 +754,17 @@ pub fn screen_layouts(system: &System) -> Option<&'static ScreenLayouts> {
     }
 }
 
+/// How Game10 restarts a Game on a Core ([`CoreInfo::restart`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Restart {
+    /// The Core's own `retro_reset`, as the power button would.
+    Reset,
+    /// The Core shut down as quitting does and loaded again for the same Game: swigino, whose
+    /// `retro_reset` does nothing and which draws nothing once its Game is unloaded and loaded
+    /// again in the same Core (ADR 0023).
+    LoadAgain,
+}
+
 /// Which OpenGL host a Core's context must be made on (see [`CoreInfo::gl`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlKind {
@@ -839,10 +850,13 @@ impl CoreInfo {
         !std::ptr::eq(self, &SWIGINO)
     }
 
-    /// Whether this Core can restart a Game (`retro_reset`), for the Pause Menu's Restart game.
-    /// swigino can't.
-    pub fn resets(&self) -> bool {
-        !std::ptr::eq(self, &SWIGINO)
+    /// How Game10 restarts a Game on this Core, for the Pause Menu's Restart game (FR-EMB-4).
+    pub fn restart(&self) -> Restart {
+        if std::ptr::eq(self, &SWIGINO) {
+            Restart::LoadAgain
+        } else {
+            Restart::Reset
+        }
     }
 
     /// Whether this Core keeps its system directory under the data dir though it has no assets:
@@ -3006,11 +3020,12 @@ mod tests {
     }
 
     #[test]
-    fn swigino_has_no_save_states_and_no_restart() {
+    fn swigino_has_no_save_states_and_restarts_by_loading_again() {
         assert!(!SWIGINO.has_states());
-        assert!(!SWIGINO.resets());
+        assert_eq!(SWIGINO.restart(), Restart::LoadAgain);
         for core in [&MESEN, &BSNES, &DOLPHIN, &LRPS2, &AZAHAR, &PPSSPP] {
-            assert!(core.has_states() && core.resets(), "{}", core.name);
+            assert!(core.has_states(), "{}", core.name);
+            assert_eq!(core.restart(), Restart::Reset, "{}", core.name);
         }
     }
 

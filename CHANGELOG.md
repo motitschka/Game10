@@ -8,7 +8,8 @@
   like every other one, from Game10's own GitHub releases, and checks it against the checksum it
   expects; `scripts/build-swigino-core.sh` builds the same Core from `swigino/` instead. Encrypted
   Games (`.nsp`, `.xci`) need your own `prod.keys` in `~/Games/bios/switch/`; homebrew (`.nro`) needs
-  none. Switch has no Save States, Resume State or Restart game. Ryubing is no longer used.
+  none. Restart game in the Pause Menu starts the Game again; Switch has no Save States or Resume
+  State. Ryubing is no longer used.
 - **Switch 2 Games in `.nup` files are listed** in `switch2/`, next to `.nsp` and `.xci`. Like every
   Switch 2 Game they can't be played yet: Play says "Not playable yet" and starts nothing.
 - **Home shows two Shelves per screen, with bigger covers.** Up, down and the mouse wheel move one whole
