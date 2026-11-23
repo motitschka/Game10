@@ -12,7 +12,7 @@ Cores: [roadmap-external-systems.md](roadmap-external-systems.md),
 
 | Milestone | System | Status | Branch |
 |---|---|---|---|
-| M9 | Switch: every saving feature | Not started | `m9-switch-saves` |
+| M9 | Switch: Restart and Delete save data | S1 started | `m9-switch-saves` |
 | M10 | PS3 inside Game10 | Not started | `m10-ps3` |
 | M11 | PS4 inside Game10 | Not started | `m11-ps4` |
 | M12 | Wii U inside Game10 | Not started | `m12-wiiu` |
@@ -20,8 +20,8 @@ Cores: [roadmap-external-systems.md](roadmap-external-systems.md),
 
 The owner's order for the new Systems is PS3, then PS4, then Wii U. M9 doesn't depend on them, and
 they don't depend on it. M10 to M12 don't depend on each other either: what they share, Embedded
-Systems whose Core has no Save States, already exists for Switch (ADR 0019). M13's first two stages
-are best done before M9, so M9's Core changes land in `swigino/` (see M13).
+Systems whose Core has no Save States, already exists for Switch (ADR 0019). Game10 is written in
+Rust only (ADR 0023), so no milestone adds C++ to a Core's source.
 
 ## How to work on a milestone
 
@@ -61,59 +61,46 @@ below; if the owner changes one, the milestones change with it.
 
 ---
 
-## M9 — Switch saves like every other System
+## M9 — Switch: Restart and Delete save data
 
-**Goal:** A Switch Game has the same five saving features as every other Embedded System: In-game
-Saves in `~/Games/saves/switch/`, 3 Save State slots with screenshots, a Resume State, Restart game,
-and Delete save data for that one Game. Today it has only the first (ADR 0019, FR-NEW-5).
-
-Save States are the risk. suyu has none (`retro_serialize_size` is 0), and no yuzu-derived emulator
-has shipped them, so they mean new work inside suyu, carried in `swigino/` (M13). S1 and S2 don't
-depend on it and come first; S3 decides how S4 is built before any of it is.
+**Goal:** A Switch Game gets the two saving features it can have without new C++ (ADR 0023):
+Restart game in the Pause Menu, and Delete save data for that one Game. It already has In-game Saves
+in `~/Games/saves/switch/` (ADR 0019, FR-NEW-5). It keeps having no Save States and no Resume State:
+those would need new code inside suyu, and Game10 is written in Rust only.
 
 **Scope**
-- **S1 Restart game:** the Pause Menu's Restart works for Switch. suyu has no `retro_reset`, so
-  either Game10's patch adds one (stop the emulated Switch and boot the Game again inside the Core)
-  or Game10 ends the Session and starts the Game again. First check whether suyu survives
-  `retro_unload_game` followed by `retro_load_game` in one process, since only one Core is loaded per
-  process.
+- **S1 Restart game:** the Pause Menu's Restart works for Switch. swigino's `retro_reset` does
+  nothing, and unloading and loading the Game again in the same Core leaves suyu drawing nothing (the
+  check of 2026-11-23, ADR 0023). So Game10 restarts swigino itself: it shuts the Core down as
+  quitting does and loads it again for the same Game, inside the same Session, with the same window,
+  options and folders. First check that swigino survives being shut down and loaded again in one
+  process, since that is also what playing a second Switch Game after a first one does.
 - **S2 Delete save data for one Game:** suyu keeps every Game's save in one NAND
   (`saves/switch/suyu/nand/user/save/…/<title ID>/`), so `InGameSaves` is `Shared` for Switch. Game10
-  learns each Game's title ID (from the Core once it has loaded the Game, or from the Game file), maps
-  it to that Game's save folder, and Delete save data removes only that folder. Homebrew (`.nro`)
-  keeps its files on the emulated SD card, and Delete save data says so instead.
-- **S3 Save State spike (time-boxed, before S4):** on a branch, find what a Switch Save State must
-  hold and whether suyu can restore it: every emulated CPU core's registers, the emulated OS's
-  threads, handles, events and services, guest memory, the GPU's state (flushed and rebuilt from
-  guest memory rather than saved from Vulkan), and the audio renderer. Measure how big a state is and
-  how long it takes to write, since a Switch has 4 GB of memory and every quit would write a Resume
-  State. The outcome is an ADR: how S4 is built, or why it can't be yet and what would change that.
-- **S4 Save States and Resume State**, built the way S3's ADR says: the 3 slots with screenshots and
-  timestamps (FR-EMB-5), the Resume State on quit (FR-EMB-6), Load save state and Start from
-  power-on in the Options Menu, and the Save States count on the Details Page, all as on other
-  Systems. States that need a long write show progress instead of looking frozen. A state from an
-  older pinned suyu that no longer loads is reported, not silently dropped.
-- **S5 Docs:** FR-NEW-5 and ADR 0019's consequences rewritten for what Switch now has, a new section
-  in [manual-checks.md](manual-checks.md), and the patches offered upstream to suyu.
+  learns each Game's title ID from the Game file, in Rust, maps it to that Game's save folder, and
+  Delete save data removes only that folder. Homebrew (`.nro`) keeps its files on the emulated SD
+  card, and Delete save data says so instead.
+- **S3 Docs:** FR-NEW-5 and ADR 0019's consequences rewritten for what Switch now has, and a new
+  section in [manual-checks.md](manual-checks.md).
 
-**Delivers:** FR-EMB-4–6 and FR-EMB-15 for Switch · a rewritten FR-NEW-5
+**Delivers:** FR-EMB-4 and FR-EMB-15 for Switch · a rewritten FR-NEW-5
 
 **Done when**
 - Restart over a Switch homebrew test Game (`.testdata/`) boots it again from the start, and the Game
   plays on after it.
 - Delete save data on one Switch Game removes its folder in the NAND and leaves another Game's save as
   it was (a test with dummy NAND folders in a temp dir).
-- A real-Core test saves a state of a moving homebrew test Game, lets it run on, loads the state, and
-  sees the picture as it was when saved; quitting and starting again continues from the Resume State.
-- The Pause Menu over a Switch Game shows Save state, Load state and Restart game enabled, with no
-  "not supported" note.
-- On the owner's machine: with their own keys and dump, a real Game's Save State, Resume State,
-  Restart and Delete save data all work, and an In-game Save made before them is still there after
-  (manual check).
+- The Pause Menu over a Switch Game shows Restart game enabled; Save state and Load state stay greyed
+  with a note that names only them.
+- On the owner's machine: with their own keys and dump, a real Game's Restart and Delete save data
+  work, and an In-game Save made before Restart is still there after (manual check).
 - Every earlier check still passes (tests, real-Core tests, smoke shots).
 
 **Notes**
-- None yet.
+- 2026-11-23: rescoped by ADR 0023 (Rust only). The old plan's Save State spike and Save States are
+  dropped. The S1 check: on `swigino-2`, `retro_unload_game` then `retro_load_game` on the same Core
+  returns true in 0.3 s, but suyu composites no frame after it (black for 360 frames), so Restart
+  can't be a reload inside the Core.
 
 ---
 
@@ -230,7 +217,8 @@ in Game10.
   own running the same inside Game10.
 
 **Notes**
-- None yet.
+- Q2's C++ patches conflict with ADR 0023 (Game10 is Rust only): M11 needs the owner's call on
+  another route before it starts.
 
 ---
 

@@ -25,6 +25,8 @@ for every new screen.
 
 ## Conventions
 
+- Game10's code is Rust only (ADR 0023). Never write C or C++ for Game10: not in `swigino/` (suyu's
+  source, which changes only by taking in suyu's releases) and not as patches to another emulator.
 - Use the glossary in `CONTEXT.md` in code, comments and UI text: System, Game, Games Root, Display
   Title, Shelf, Carousel, Console Page, Config. Avoid the listed alternatives (ROM, platform, console).
 - Systems come only from `systems::SYSTEMS`, which is in System Order. Never list Systems anywhere else.
