@@ -16,7 +16,7 @@ Cores: [roadmap-external-systems.md](roadmap-external-systems.md),
 | M10 | PS3 inside Game10 | Not started | `m10-ps3` |
 | M11 | PS4 inside Game10 | Not started | `m11-ps4` |
 | M12 | Wii U inside Game10 | Not started | `m12-wiiu` |
-| M13 | Switch: a Core of our own | F1 to F4 done, `swigino-2` published; manual checks left | `m13-switch-core` |
+| M13 | Switch: a Core of our own | Merged into `main` (2026-11-23); manual checks left | `m13-switch-core` |
 
 The owner's order for the new Systems is PS3, then PS4, then Wii U. M9 doesn't depend on them, and
 they don't depend on it. M10 to M12 don't depend on each other either: what they share, Embedded
@@ -430,5 +430,7 @@ commits in `swigino/` rather than added to a patch file. F3 and F4 don't block M
   45189432281: `swigino_libretro.so.zip`, 16.7 MB, SHA-256 `ce189d45…8a86`, now pinned in
   `src/cores.rs` in place of `swigino-1`, which is withdrawn. `hw_swigino_boots_…` passes on that
   exact Core.
+- **Merged (2026-11-23):** the owner merged `m13-switch-core` into `main` at `e7f74ae`. Still open:
+  the Setup and Play download screens with the real network (manual checks, section 10).
 - If this works, M11's shadPS4 Core, now planned as `patches/shadps4/`, could follow the same route.
   That is M11's call.
